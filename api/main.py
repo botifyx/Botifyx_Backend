@@ -53,17 +53,37 @@ class UserQuery(BaseModel):
     previous_query: Optional[str] = None
     previous_response: Optional[str] = None
 
+def get_all_projects(email_id : str, access_token: str):
+    url = f"{JIRA_BASE_URL}/rest/api/3/project"
+    auth = HTTPBasicAuth(email_id, access_token)
+    headers = {
+    "Accept": "application/json"
+    }
+    response = requests.request(
+    "GET",
+    url,
+    headers=headers,
+    auth=auth
+    )
+    # response_data = json.dumps(json.loads(response.text), sort_keys=True, indent=4, separators=(",", ": "))
+    print("projects",json.dumps(json.loads(response.text), sort_keys=True, indent=4, separators=(",", ": ")))
+    return response.json()
+
 # 🔹 Fetch Project Details from JIRA
 def fetch_project_details(project_key: str, user_query: str, email_id: str, access_token: str):
-    url = f"{JIRA_BASE_URL}/rest/api/3/project/{project_key}"
-    auth = HTTPBasicAuth(email_id, access_token)
-    headers = {"Accept": "application/json"}
+    if project_key == "unknown":
+        project_data = get_all_projects(email_id, access_token)
+    else:
+        url = f"{JIRA_BASE_URL}/rest/api/3/project/{project_key}"
+        auth = HTTPBasicAuth(email_id, access_token)
+        headers = {"Accept": "application/json"}
 
-    response = requests.get(url, headers=headers, auth=auth)
-    if response.status_code != 200:
-        raise HTTPException(status_code=response.status_code, detail=response.text)
+        response = requests.get(url, headers=headers, auth=auth)
+        if response.status_code != 200:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
 
-    project_data = response.json()
+        project_data = response.json()
+    print("project_data",project_data)
     prompt = f"""
       You are an **AI Assistant for a Project Manager**, responsible for providing **clear, concise, and insightful project updates** based on JIRA data. Your goal is to **respond directly to queries** instead of asking the user for details.  
 
@@ -110,6 +130,7 @@ def fetch_project_details(project_key: str, user_query: str, email_id: str, acce
 
     return {"message": ai_response.choices[0].message.content}
 
+
 # 🔹 Update Defect in JIRA
 def update_defect_in_jira(defect_id: str, status: str, description: str, priority: str, email_id: str, access_token: str):
     if not defect_id:
@@ -133,21 +154,6 @@ def update_defect_in_jira(defect_id: str, status: str, description: str, priorit
     else:
         raise HTTPException(status_code=response.status_code, detail=response.text)
 
-def get_all_projects(email_id : str, access_token: str):
-    url = f"{JIRA_BASE_URL}/rest/api/3/project"
-    auth = HTTPBasicAuth(email_id, access_token)
-    headers = {
-    "Accept": "application/json"
-    }
-    response = requests.request(
-    "GET",
-    url,
-    headers=headers,
-    auth=auth
-    )
-    # response_data = json.dumps(json.loads(response.text), sort_keys=True, indent=4, separators=(",", ": "))
-    print("projects",json.dumps(json.loads(response.text), sort_keys=True, indent=4, separators=(",", ": ")))
-    return response.json()
 
 # 🔹 Create a Defect in JIRA
 def create_defect_in_jira(project_key: str, summary: str, description: str, priority: str, email_id: str, access_token: str):
@@ -401,8 +407,12 @@ def process_query(request: UserQuery):
 
     else:
         return {"message": "I couldn't determine what you need. Could you clarify your request?"}
+    
+    message_value = responses[0]["message"]["message"]
 
-    return responses
+    return message_value
+
+    # return responses
 
 # Store state tokens to prevent CSRF attacks
 state_store = {}
