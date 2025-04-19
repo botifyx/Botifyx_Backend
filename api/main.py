@@ -17,21 +17,14 @@ import re
 from dotenv import load_dotenv
 import os
 
-# Only load dotenv in development environment
-if os.path.isfile(".env"):
-    load_dotenv()
+load_dotenv()
 
 JIRA_CLIENT_ID = os.getenv("JIRA_CLIENT_ID")
 JIRA_CLIENT_SECRET = os.getenv("JIRA_CLIENT_SECRET")
 JIRA_REDIRECT_URI = os.getenv("JIRA_REDIRECT_URI")
 JIRA_AUTH_URL = os.getenv("JIRA_AUTH_URL")
-JIRA_TOKEN_URL = os.getenv("JIRA_TOKEN_URL")
+JIRA_TOKEN_URL =os.getenv("JIRA_TOKEN_URL")
 JIRA_API_SCOPE = os.getenv("JIRA_API_SCOPE")
-JIRA_BASE_URL = os.getenv("JIRA_BASE_URL")
-PROJECT_KEY = os.getenv("PROJECT_KEY")
-JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN")
-JIRA_EMAIL = os.getenv("JIRA_EMAIL")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 app = FastAPI()
 
@@ -42,6 +35,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+JIRA_BASE_URL = os.getenv("JIRA_BASE_URL")
+PROJECT_KEY = os.getenv("PROJECT_KEY")
+JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN")
+JIRA_EMAIL =os.getenv("JIRA_EMAIL")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -130,7 +130,6 @@ def fetch_project_details(project_key: str, user_query: str, email_id: str, acce
 
     return {"message": ai_response.choices[0].message.content}
 
-
 # 🔹 Update Defect in JIRA
 def update_defect_in_jira(defect_id: str, status: str, description: str, priority: str, email_id: str, access_token: str):
     if not defect_id:
@@ -153,7 +152,6 @@ def update_defect_in_jira(defect_id: str, status: str, description: str, priorit
         return {"message": f"Defect {defect_id} updated successfully!"}
     else:
         raise HTTPException(status_code=response.status_code, detail=response.text)
-
 
 # 🔹 Create a Defect in JIRA
 def create_defect_in_jira(project_key: str, summary: str, description: str, priority: str, email_id: str, access_token: str):
@@ -278,14 +276,38 @@ def determine_intent(user_query):
     response = openai_client.chat.completions.create(
         model='gpt-4o-mini',
         messages=[
-            {"role": "system", "content": "You are an AI assistant that classifies user queries related to JIRA."},
-            {"role": "user", "content": f"Classify this query: '{user_query}'. "
-                                        "Return only one of the following intents: ['project_status', 'update_defect', 'create_defect', 'fetch_project_details', 'unknown']."}
+            {
+                "role": "system",
+                "content": (
+                    "You are an AI assistant that classifies user queries related to JIRA or casual conversation.\n"
+                    "Return only one of the following intents: "
+                    "['project_status', 'update_defect', 'create_defect', 'fetch_project_details', 'greeting', 'unknown'].\n\n"
+                    "Examples:\n"
+                    "- 'Hi there!' → greeting\n"
+                    "- 'Good morning' → greeting\n"
+                    "- 'What is the status of SCRUM-102?' → project_status\n"
+                    "- 'Please update BUG-2452' → update_defect\n"
+                    "- 'I want to log a new issue for the mobile app' → create_defect"
+                )
+            },
+            {
+                "role": "user",
+                "content": f"Classify this query: '{user_query}'"
+            }
         ],
         temperature=0
     )
-    
     return response.choices[0].message.content.strip()
+
+def respond_to_greeting():
+    greeting_responses = [
+        "Hello! How can I help you with your JIRA tasks today?",
+        "Hi there! Ready to manage some issues?",
+        "Good to see you! What can I assist you with today?",
+        "Hey! Need help creating or updating a ticket?"
+    ]
+    return {"message": random.choice(greeting_responses)}
+
 
 def extract_issue_details(user_query, previous_query, previous_response):
     """
@@ -343,6 +365,63 @@ def extract_issue_details(user_query, previous_query, previous_response):
     return extracted_details
 
 
+def generate_project_summary(projects):
+    """
+    Use GPT to dynamically create a summary string from a list of JIRA projects.
+    """
+    if not projects:
+        return "You don’t currently have access to any projects."
+
+    # Build a simple string for GPT input
+    project_list_str = "\n".join([f"- {p['name']} ({p['key']})" for p in projects])
+
+    prompt = (
+        "You're an assistant summarizing JIRA project access for a user.\n"
+        "Given the following list of projects, write a concise and friendly message "
+        "telling the user what projects they have access to and prompt them to choose one.\n\n"
+        f"Projects:\n{project_list_str}\n\n"
+        "Respond in a clear, natural tone."
+    )
+
+    response = openai_client.chat.completions.create(
+        model='gpt-4o-mini',
+        messages=[
+            {"role": "system", "content": "You generate friendly summaries based on JIRA project lists."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.5
+    )
+
+    return response.choices[0].message.content.strip()
+
+
+def fetch_all_projects_for_user(email_id, access_token):
+    """
+    Fetches all accessible JIRA projects and returns both a summary string
+    and a structured list of project keys/names.
+    """
+    url = f"{JIRA_BASE_URL}/rest/api/3/project"
+    auth = HTTPBasicAuth(email_id, access_token)
+
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {access_token}"
+    }
+
+    try:
+        response = requests.get(url, headers=headers,  auth=auth)
+        response.raise_for_status()
+        projects_data = response.json()
+        print("project_dta",projects_data)
+        return [{"key": proj["key"], "name": proj["name"]} for proj in projects_data]
+
+    except requests.exceptions.RequestException as err:
+        print(f"Request error: {err}")
+        return {"projects": [], "summary": "I couldn’t fetch your projects due to a connection issue."}
+
+
+
+
 @app.post("/new_chat")
 def process_query(request: UserQuery):
     user_query = request.query
@@ -370,11 +449,28 @@ def process_query(request: UserQuery):
     status = extracted_details.get("status", "To Do")
     defect_id = extracted_details.get("defect_id")
     # Step 3: Handle the detected intent dynamically
-    if intent == "project_status":
-        raw_response = fetch_project_details(project_id, user_query, email_id, access_token)
-        # analyzed_response = analyze_response(user_query, raw_response)
-        # print("analyzed response",analyzed_response)
-        responses.append({"message": raw_response})
+    if intent == "greeting":
+        responses.append(respond_to_greeting())
+        return responses
+
+    # elif intent == "project_status":
+    #     raw_response = fetch_project_details(project_id, user_query, email_id, access_token)
+    #     # analyzed_response = analyze_response(user_query, raw_response)
+    #     # print("analyzed response",analyzed_response)
+    #     responses.append({"message": raw_response})
+    elif intent == "project_status":
+        if project_id == "unknown":
+            projects = fetch_all_projects_for_user(email_id, access_token)
+            summary = generate_project_summary(projects)
+            print("summary",summary)
+            return [{
+                "message": summary,
+                "projects": projects
+            }]
+        else:
+            raw_response = fetch_project_details(project_id, user_query, email_id, access_token)
+            responses.append({"message": raw_response})
+
 
     elif intent == "fetch_project_details":
         raw_response = fetch_project_details(project_id, user_query, email_id, access_token)
@@ -411,8 +507,6 @@ def process_query(request: UserQuery):
     message_value = responses[0]["message"]["message"]
 
     return message_value
-
-    # return responses
 
 # Store state tokens to prevent CSRF attacks
 state_store = {}
@@ -498,4 +592,4 @@ async def jira_oauth_callback(request: Request):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, port=7000)
+    uvicorn.run(app, host = '0.0.0.0', port=8000)
